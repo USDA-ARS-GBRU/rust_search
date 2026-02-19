@@ -37,7 +37,7 @@ fn main() -> io::Result<()> {
 
     let mut pattern_reader = parse_fastx_file(&args.patterns).expect("Invalid pattern file");
     let mut all_motifs = Vec::new();
-
+    
     // Mapping from unique seed to list of (motif_idx, offset)
     let mut seed_map: HashMap<Vec<u8>, Vec<(usize, usize)>> = HashMap::new();
 
@@ -48,7 +48,7 @@ fn main() -> io::Result<()> {
         for s in vec![seq, rc] {
             let motif_idx = all_motifs.len();
             all_motifs.push(s.clone());
-
+            
             if s.len() >= 7 {
                 for offset in 0..=(s.len() - 7) {
                     let seed = s[offset..offset+7].to_vec();
@@ -110,13 +110,13 @@ fn main() -> io::Result<()> {
                                 let vicinity = &chunk[genome_start as usize .. genome_end as usize];
                                 // Use the thal function from the library
                                 let result = thal::thal(motif, vicinity, &thal_args, ThalMode::Fast);
-
+                                
                                 // ΔG is in cal/mol, convert to kcal/mol for threshold comparison
                                 let dg_kcal = result.dg / 1000.0;
-
+                                
                                 if dg_kcal <= args.threshold {
-                                    println!("{}\t{}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}",
-                                        seq_id, start + genome_start as usize, dg_kcal, result.temp,
+                                    println!("{}\t{}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}", 
+                                        seq_id, start + genome_start as usize, dg_kcal, result.temp, 
                                         result.dh / 1000.0, result.ds,
                                         String::from_utf8_lossy(motif));
                                 }

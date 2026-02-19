@@ -127,21 +127,21 @@ pub mod thal {
         let res = (|| unsafe {
             let mut params: ThalParametersC = std::mem::zeroed();
             thal_set_null_parameters(&mut params);
-
+            
             let mut results: ThalResultsC = std::mem::zeroed();
             results.sec_struct = std::ptr::null_mut();
 
             let c_path = CString::new(path).map_err(|e| e.to_string())?;
             if thal_load_parameters(c_path.as_ptr(), &mut params, &mut results) != 0 {
-                return Err(format!("Failed to load parameters from {}: {}", path,
+                return Err(format!("Failed to load parameters from {}: {}", path, 
                     CStr::from_ptr(results.msg.as_ptr()).to_string_lossy()));
             }
 
             if get_thermodynamic_values(&params, &mut results) != 0 {
-                return Err(format!("Failed to initialize thermodynamic values: {}",
+                return Err(format!("Failed to initialize thermodynamic values: {}", 
                     CStr::from_ptr(results.msg.as_ptr()).to_string_lossy()));
             }
-
+            
             Ok(())
         })();
 
@@ -172,7 +172,7 @@ pub mod thal {
         unsafe {
             let mut c_results: ThalResultsC = std::mem::zeroed();
             c_results.sec_struct = std::ptr::null_mut();
-
+            
             thal_ffi(
                 c_seq1.as_ptr() as *const u8,
                 c_seq2.as_ptr() as *const u8,
@@ -231,7 +231,7 @@ pub mod thal {
             let seq1 = b"ATGCGATCGATCG";
             let seq2 = b"ATGCGATCGATCG";
             let result = thal(seq1, seq2, &args, ThalMode::Fast);
-
+            
             assert!(result.temp > 0.0);
             assert!(result.dg < 0.0);
             assert_eq!(result.msg, "");
@@ -247,7 +247,7 @@ pub mod thal {
             let result1 = thal(seq1, seq2, &args, ThalMode::Fast);
 
             // One mismatch
-            let seq3 = b"ATGCGATCGATCT";
+            let seq3 = b"ATGCGATCGATCT"; 
             let result2 = thal(seq1, seq3, &args, ThalMode::Fast);
 
             assert!(result2.temp < result1.temp);
