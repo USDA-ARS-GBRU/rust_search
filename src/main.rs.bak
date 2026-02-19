@@ -1,0 +1,83 @@
+use clap::{Parser, ValueEnum};
+use needletail::{parse_fastx_file, Sequence};
+use rayon::prelude::*;
+use aho_corasick::AhoCorasick;
+use std::io;
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum, Debug)]
+enum Mode { Levenshtein, Hamming }
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long)] file: String,
+    #[arg(short, long)] patterns: String,
+    #[arg(short, long, default_value_t = 2)] distance: usize,
+    #[arg(short, long, value_enum, default_value_t = Mode::Levenshtein)] mode: Mode,
+}
+
+// Global Levenshtein distance for 20bp strings
+fn levenshtein_dist(a: &[u8], b: &[u8]) -> usize {
+    let m = a.len();
+    let n = b.len();
+    let mut dp = vec![vec![0; n + 1]; m + 1];
+    for i in 0..=m { dp[i][0] = i; }
+    for j in 0..=n { dp[0][j] = j; }
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            dp[i][j] = (dp[i - 1][j] + 1)
+                .min(dp[i][j - 1] + 1)
+                .min(dp[i - 1][j - 1] + cost);
+        }
+    }
+    dp[m][n]
+}
+
+fn main() -> io::Result<()> {
+    let args = Args::parse();
+    let mut pattern_reader = parse_fastx_file(&args.patterns).expect("Pattern file error");
+    let mut all_motifs = Vec::new();
+    let mut all_seeds = Vec::new();
+
+    while let Some(record) = pattern_reader.next() {
+        let rec = record.unwrap();
+        let s = rec.seq().to_ascii_uppercase();
+        let rc = rec.reverse_complement().to_ascii_uppercase();
+        for seq in vec![s, rc] {
+            // Seed length is (L / k+1). For 20bp/k=2, 6bp is mathematically safe.
+            all_seeds.push(seq[0..7].to_vec()); 
+            all_motifs.push(seq);
+        }
+    }
+
+    let ac = AhoCorasick::new(&all_seeds).unwrap();
+    let mut reader = parse_fastx_file(&args.file).expect("Genome file error");
+
+    while let Some(record) = reader.next() {
+        let rec = record.unwrap();
+        let seq_id = String::from_utf8_lossy(rec.id()).to_string();
+        let full_seq = rec.seq();
+
+        full_seq.par_chunks(1_000_000).enumerate().for_each(|(i, raw_chunk)| {
+            let chunk = raw_chunk.to_ascii_uppercase();
+            let offset = i * 1_000_000;
+
+            // One pass over the chunk finds ALL potential hits for ALL motifs
+            for mat in ac.find_iter(&chunk) {
+                let motif = &all_motifs[mat.pattern().as_usize()];
+                let hit_start = mat.start();
+                
+                // CRITICAL: We only look at a 25bp window, not the whole 1MB chunk
+                let search_window = (motif.len() + args.distance).min(chunk.len() - hit_start);
+                let candidate = &chunk[hit_start..hit_start + search_window];
+
+                let dist = levenshtein_dist(motif, candidate);
+
+                if dist <= args.distance {
+                    println!("{}\t{}\t{}\t{}", seq_id, offset + hit_start, dist, String::from_utf8_lossy(motif));
+                }
+            }
+        });
+    }
+    Ok(())
+}

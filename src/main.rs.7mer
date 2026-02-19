@@ -1,0 +1,81 @@
+// 10mer fast
+use clap::{Parser, ValueEnum};
+use needletail::{parse_fastx_file, Sequence};
+use rayon::prelude::*;
+use aho_corasick::AhoCorasick;
+use std::io;
+use triple_accel::levenshtein_search; // Using the optimized bit-vector searcher again
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum, Debug)]
+enum Mode { Levenshtein, Hamming }
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long)] file: String,
+    #[arg(short, long)] patterns: String,
+    #[arg(short, long, default_value_t = 2)] distance: u32,
+    #[arg(short, long, value_enum, default_value_t = Mode::Levenshtein)] mode: Mode,
+}
+
+fn main() -> io::Result<()> {
+    let args = Args::parse();
+    let mut pattern_reader = parse_fastx_file(&args.patterns).expect("Pattern file error");
+    let mut all_motifs = Vec::new();
+    let mut all_seeds = Vec::new();
+
+    while let Some(record) = pattern_reader.next() {
+        let rec = record.unwrap();
+        let seq = rec.seq().to_ascii_uppercase();
+        let rc = rec.reverse_complement().to_ascii_uppercase();
+        
+        for s in vec![seq, rc] {
+            // Seed: first 10bp. If we find this, we check the surrounding area.
+            all_seeds.push(s[0..7].to_vec());
+            all_motifs.push(s);
+        }
+    }
+
+    let ac = AhoCorasick::new(&all_seeds).unwrap();
+    let mut reader = parse_fastx_file(&args.file).expect("Genome file error");
+    let chunk_size = 1_000_000;
+    let overlap = 100;
+
+    while let Some(record) = reader.next() {
+        let rec = record.unwrap();
+        let seq_id = String::from_utf8_lossy(rec.id()).to_string();
+        let full_seq = rec.seq();
+
+        (0..full_seq.len())
+            .into_par_iter()
+            .step_by(chunk_size - overlap)
+            .for_each(|start| {
+                let end = (start + chunk_size).min(full_seq.len());
+                let chunk = full_seq[start..end].to_ascii_uppercase();
+                
+                for mat in ac.find_iter(&chunk) {
+                    let motif = &all_motifs[mat.pattern().as_usize()];
+                    
+                    // Instead of complex math, just grab a 60bp window around the seed hit
+                    // This covers any possible alignment within distance 2
+                    let hit_pos = mat.start();
+                    let v_start = if hit_pos > 20 { hit_pos - 20 } else { 0 };
+                    let v_end = (hit_pos + 40).min(chunk.len());
+                    let vicinity = &chunk[v_start..v_end];
+
+                    // Search for the motif ONLY in this 60bp window
+                    for m in levenshtein_search(motif, vicinity) {
+                        if m.k <= args.distance {
+                            // Deduplicate: check if match start in chunk primary zone
+                            let global_start_in_chunk = v_start + m.start;
+                            if global_start_in_chunk < (chunk_size - overlap) || end == full_seq.len() {
+                                println!("{}\t{}\t{}\t{}", 
+                                    seq_id, start + global_start_in_chunk, m.k, 
+                                    String::from_utf8_lossy(motif));
+                            }
+                        }
+                    }
+                }
+            });
+    }
+    Ok(())
+}

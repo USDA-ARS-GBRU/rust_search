@@ -1,0 +1,99 @@
+use clap::{Parser, ValueEnum};
+use needletail::{parse_fastx_file, Sequence};
+use rayon::prelude::*;
+use aho_corasick::AhoCorasick;
+use std::io;
+use triple_accel::levenshtein_search;
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum, Debug)]
+enum Mode { Levenshtein, Hamming }
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long)] file: String,
+    #[arg(short, long)] patterns: String,
+    #[arg(short, long, default_value_t = 2)] distance: u32,
+    #[arg(short, long, value_enum, default_value_t = Mode::Levenshtein)] mode: Mode,
+}
+
+// Map seeds to their parent motifs
+struct Motif {
+    raw: Vec<u8>,
+    seed_offset: usize,
+}
+
+fn main() -> io::Result<()> {
+    let args = Args::parse();
+    let mut pattern_reader = parse_fastx_file(&args.patterns).expect("Invalid pattern file");
+    let mut all_motifs = Vec::new();
+    let mut all_seeds = Vec::new();
+
+    while let Some(record) = pattern_reader.next() {
+        let rec = record.expect("Invalid record");
+        let seqs = vec![rec.seq().to_ascii_uppercase(), rec.reverse_complement().to_ascii_uppercase()];
+        
+        for s in seqs {
+            // PIGEONHOLE: 3 seeds per motif (0..6, 7..13, 14..20)
+            // This guarantees sensitivity for distance 2.
+            let s1 = s[0..6].to_vec();
+            let s2 = s[7..13].to_vec();
+            let s3 = s[14..20].to_vec();
+
+            all_seeds.push(s1);
+            all_motifs.push(Motif { raw: s.clone(), seed_offset: 0 });
+            
+            all_seeds.push(s2);
+            all_motifs.push(Motif { raw: s.clone(), seed_offset: 7 });
+            
+            all_seeds.push(s3);
+            all_motifs.push(Motif { raw: s, seed_offset: 14 });
+        }
+    }
+
+    let ac = AhoCorasick::new(&all_seeds).unwrap();
+    let mut reader = parse_fastx_file(&args.file).expect("Invalid genome");
+    let chunk_size = 1_000_000;
+    let overlap = 100;
+
+    while let Some(record) = reader.next() {
+        let rec = record.expect("Record error");
+        let seq_id = String::from_utf8_lossy(rec.id()).to_string();
+        let full_seq = rec.seq();
+
+        (0..full_seq.len())
+            .into_par_iter()
+            .step_by(chunk_size - overlap)
+            .for_each(|start| {
+                let end = (start + chunk_size).min(full_seq.len());
+                // Crucial: uppercase the chunk so we don't miss soft-masked DNA
+                let chunk = full_seq[start..end].to_ascii_uppercase();
+                let primary_end = chunk_size - overlap;
+
+                for mat in ac.find_iter(&chunk) {
+                    let motif = &all_motifs[mat.pattern().as_usize()];
+                    
+                    // Logic: Where would the motif START relative to this seed hit?
+                    let hit_pos = mat.start();
+                    let v_start = if hit_pos >= motif.seed_offset + 5 { 
+                        hit_pos - motif.seed_offset - 5 
+                    } else { 0 };
+                    
+                    let v_end = (hit_pos + 30).min(chunk.len());
+                    let vicinity = &chunk[v_start..v_end];
+
+                    // Use the heavy-duty searcher only on this 35bp window
+                    for m in levenshtein_search(&motif.raw, vicinity) {
+                        if m.k <= args.distance {
+                            let global_start_in_chunk = v_start + m.start;
+                            if global_start_in_chunk < primary_end || end == full_seq.len() {
+                                println!("{}\t{}\t{}\t{}", 
+                                    seq_id, start + global_start_in_chunk, m.k, 
+                                    String::from_utf8_lossy(&motif.raw));
+                            }
+                        }
+                    }
+                }
+            });
+    }
+    Ok(())
+}

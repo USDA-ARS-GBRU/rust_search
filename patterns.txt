@@ -1,0 +1,2 @@
+>pattern_1
+ATCGATCGATCGATCGATCG
