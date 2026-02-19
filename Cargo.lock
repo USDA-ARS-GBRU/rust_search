@@ -334,7 +334,9 @@ name = "rust_search"
 version = "0.1.0"
 dependencies = [
  "aho-corasick",
+ "cc",
  "clap",
+ "libc",
  "needletail",
  "rayon",
 ]
