@@ -1,0 +1,3 @@
+[submodule "primer3"]
+	path = primer3
+	url = https://github.com/primer3-org/primer3.git
