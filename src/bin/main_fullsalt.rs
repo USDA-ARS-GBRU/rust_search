@@ -29,6 +29,11 @@ struct Args {
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
+
+    // Initialize thermodynamic parameters from primer3_config
+    rust_search::thal::ensure_parameters_loaded("primer3/src/primer3_config/")
+        .expect("Failed to load thermodynamic parameters");
+
     let mut pattern_reader = parse_fastx_file(&args.patterns).expect("Invalid pattern file");
     let mut all_motifs = Vec::new();
     let mut all_seeds = Vec::new();
@@ -77,14 +82,15 @@ fn main() -> io::Result<()> {
 
                 if vicinity.len() == motif.len() {
                     // Use the thal function from the library
-                    let result = thal::thal(vicinity, vicinity, &thal_args, ThalMode::Fast);
+                    let result = thal::thal(motif, vicinity, &thal_args, ThalMode::Fast);
                     
                     // ΔG is in cal/mol, convert to kcal/mol for threshold comparison
                     let dg_kcal = result.dg / 1000.0;
                     
                     if dg_kcal <= args.threshold {
-                        println!("{}\t{}\t{:.2}\t{:.2}\t{}", 
+                        println!("{}\t{}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}",
                             seq_id, start + hit_pos, dg_kcal, result.temp, 
+                            result.dh / 1000.0, result.ds,
                             String::from_utf8_lossy(motif));
                     }
                 }
